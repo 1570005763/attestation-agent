@@ -4,3 +4,4 @@
 //
 
 pub mod sample;
+pub mod aliyun;
