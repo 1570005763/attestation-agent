@@ -6,7 +6,7 @@ use anyhow::*;
 
 fn main() -> Result<()> {
     // #[cfg(feature = "aliyun")]
-    tonic_build::compile_protos("./src/plugins/aliyun/util/protobuf/dkms_api.proto")?;
+    tonic_build::compile_protos("./src/plugins/aliyun/protobuf/dkms_api.proto")?;
 
     Ok(())
 }

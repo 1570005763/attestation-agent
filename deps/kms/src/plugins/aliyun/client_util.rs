@@ -1,19 +1,16 @@
 use anyhow::*;
+use chrono::{DateTime, Utc};
+use hex;
 use prost::Message;
 use reqwest::header::HeaderMap;
-use chrono::{Utc, DateTime};
-use std::io::Read;
-use std::{collections::HashMap, any::Any};
-use std::string::ToString;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::convert::AsRef;
 use std::str;
+use std::string::ToString;
 use std::time::Duration;
-use sha2::{Sha256, Digest};
-use hex;
 
-use crate::plugins::aliyun::models;
-
-use super::credential::Client as Credential;
+use super::models;
 
 pub mod dkms_pb3 {
     tonic::include_proto!("dkms_api");
@@ -45,7 +42,7 @@ impl OpenapiUtilClient {
         if !endpoint.is_empty() {
             endpoint.to_string()
         } else if !region_id.is_empty() {
-            format!("cn-hangzhou")
+            "cn-hangzhou".to_string()
         } else {
             format!("kms-instance.{}.aliyuncs.com", region_id)
         }
@@ -57,7 +54,7 @@ impl OpenapiUtilClient {
         let error = dkms_pb3::Error::decode(msg)?;
         result.insert("Code".to_string(), error.error_code.to_string());
         result.insert("Message".to_string(), error.error_message.to_string());
-        result.insert("RequestId".to_string(), error.request_id.to_string());
+        result.insert("RequestId".to_string(), error.request_id);
         Ok(result)
     }
 
@@ -67,19 +64,32 @@ impl OpenapiUtilClient {
         let headers = &request.headers;
         // let query = &request.query;
         let query = HashMap::new();
-        let content_sha256 = headers.get("content-sha256").ok_or_else(||anyhow!("no content-sha256"))?.to_str()?;
-        let content_type = headers.get("content-type").ok_or_else(||anyhow!("no content-type"))?.to_str()?;
-        let date = headers.get("date").ok_or_else(||anyhow!("no date"))?.to_str()?;
+        let content_sha256 = headers
+            .get("content-sha256")
+            .ok_or_else(|| anyhow!("no content-sha256"))?
+            .to_str()?;
+        let content_type = headers
+            .get("content-type")
+            .ok_or_else(|| anyhow!("no content-type"))?
+            .to_str()?;
+        let date = headers
+            .get("date")
+            .ok_or_else(|| anyhow!("no date"))?
+            .to_str()?;
         let header = format!(
             "{}\n{}\n{}\n{}\n",
             method, content_sha256, content_type, date
         );
-        let canonicalized_headers = OpenapiUtilClient::_get_canonicalized_headers(&headers)?;
-        let canonicalized_resource = OpenapiUtilClient::_get_canonicalized_resource(&pathname, &query);
+        let canonicalized_headers = OpenapiUtilClient::_get_canonicalized_headers(headers)?;
+        let canonicalized_resource =
+            OpenapiUtilClient::_get_canonicalized_resource(&pathname, &query);
         println!("header: {}", header);
         println!("canonicalized_headers: {}", canonicalized_headers);
         println!("canonicalized_resource: {}", canonicalized_resource);
-        Ok(format!("{}{}{}", header, canonicalized_headers, canonicalized_resource))
+        Ok(format!(
+            "{}{}{}",
+            header, canonicalized_headers, canonicalized_resource
+        ))
     }
 
     fn _get_canonicalized_headers(headers: &HeaderMap) -> Result<String> {
@@ -91,7 +101,14 @@ impl OpenapiUtilClient {
             if key.starts_with(prefix) {
                 result_list.push(key.clone());
                 result_list.push(":".to_string());
-                result_list.push(headers.get(key).ok_or_else(||anyhow!("no key"))?.to_str()?.trim().to_string());
+                result_list.push(
+                    headers
+                        .get(key)
+                        .ok_or_else(|| anyhow!("no key"))?
+                        .to_str()?
+                        .trim()
+                        .to_string(),
+                );
                 result_list.push("\n".to_string());
             }
         }
@@ -108,10 +125,18 @@ impl OpenapiUtilClient {
         }
         path.push(pathname.to_string());
         path.push("?".to_string());
-        OpenapiUtilClient::_get_canonicalized_query_string(&mut path, query, &query.keys().map(|k| k.to_owned()).collect::<Vec<String>>())
+        OpenapiUtilClient::_get_canonicalized_query_string(
+            &mut path,
+            query,
+            &query.keys().map(|k| k.to_owned()).collect::<Vec<String>>(),
+        )
     }
 
-    fn _get_canonicalized_query_string(path: &mut Vec<String>, query: &HashMap<String, String>, keys: &Vec<String>) -> String {
+    fn _get_canonicalized_query_string(
+        path: &mut Vec<String>,
+        query: &HashMap<String, String>,
+        keys: &Vec<String>,
+    ) -> String {
         if query.is_empty() || keys.is_empty() {
             return path.join("");
         }
@@ -141,9 +166,9 @@ impl OpenapiUtilClient {
         hex::encode_upper(hash_result)
     }
 
-    pub fn to_hex_string(byte_array: &[u8]) -> String {
-        hex::encode_upper(byte_array)
-    }
+    // pub fn to_hex_string(byte_array: &[u8]) -> String {
+    //     hex::encode_upper(byte_array)
+    // }
 
     pub fn get_date_utcstring() -> Result<String> {
         let now: DateTime<Utc> = Utc::now();
@@ -153,10 +178,6 @@ impl OpenapiUtilClient {
 
     pub fn get_user_agent() -> String {
         concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION")).into()
-    }
-
-    pub fn get_credential(client_key_file: &String, password: &String) -> Result<Credential> {
-        Ok(Credential::new(client_key_file, password)?)
     }
 
     pub fn get_serialized_encrypt_request(req_body: &models::EncryptRequest) -> Result<Vec<u8>> {
@@ -170,7 +191,7 @@ impl OpenapiUtilClient {
         if let Some(algorithm) = &req_body.algorithm {
             encrypt_request.algorithm = algorithm.clone();
         }
-        if let Some(iv) = &req_body.iv{
+        if let Some(iv) = &req_body.iv {
             encrypt_request.iv = iv.clone();
         }
         if let Some(aad) = &req_body.aad {
@@ -188,14 +209,15 @@ impl OpenapiUtilClient {
         let resp_body: &[u8] = &resp_entity.body_bytes;
         let encrypt_response = dkms_pb3::EncryptResponse::decode(resp_body)?;
         println!("decode done");
-        let mut result = models::EncryptResponse::default();
-        result.response_headers = resp_entity.headers.clone();
-        result.key_id = Some(encrypt_response.key_id);
-        result.ciphertext_blob = Some(encrypt_response.ciphertext_blob);
-        result.iv = Some(encrypt_response.iv);
-        result.algorithm = Some(encrypt_response.algorithm);
-        result.padding_mode = Some(encrypt_response.padding_mode);
-        result.response_id = Some(encrypt_response.request_id);
+        let result = models::EncryptResponse {
+            response_headers: resp_entity.headers.clone(),
+            key_id: Some(encrypt_response.key_id),
+            ciphertext_blob: Some(encrypt_response.ciphertext_blob),
+            iv: Some(encrypt_response.iv),
+            algorithm: Some(encrypt_response.algorithm),
+            padding_mode: Some(encrypt_response.padding_mode),
+            response_id: Some(encrypt_response.request_id),
+        };
         Ok(result)
     }
 
@@ -227,14 +249,14 @@ impl OpenapiUtilClient {
     pub fn parse_decrypt_response(resp_entity: &ResponseEntity) -> Result<models::DecryptResponse> {
         let resp_body: &[u8] = &resp_entity.body_bytes;
         let decrypt_response = dkms_pb3::DecryptResponse::decode(resp_body)?;
-        let mut result = models::DecryptResponse::default();
-        result.response_headers = resp_entity.headers.clone();
-        result.key_id = Some(decrypt_response.key_id);
-        result.plaintext = Some(decrypt_response.plaintext);
-        result.algorithm = Some(decrypt_response.algorithm);
-        result.padding_mode = Some(decrypt_response.padding_mode);
-        result.request_id = Some(decrypt_response.request_id);
+        let result = models::DecryptResponse {
+            response_headers: resp_entity.headers.clone(),
+            key_id: Some(decrypt_response.key_id),
+            plaintext: Some(decrypt_response.plaintext),
+            algorithm: Some(decrypt_response.algorithm),
+            padding_mode: Some(decrypt_response.padding_mode),
+            request_id: Some(decrypt_response.request_id),
+        };
         Ok(result)
     }
 }
-

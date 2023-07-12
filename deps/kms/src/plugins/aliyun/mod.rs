@@ -12,16 +12,18 @@
 
 use anyhow::*;
 use async_trait::async_trait;
-use serde::{Serialize, Deserialize};
-use std::collections::HashMap;
+use reqwest::header::HeaderMap;
+use serde::{Deserialize, Serialize};
 
 use crate::KMS;
 
 mod client;
-mod models;
+mod client_util;
 mod config;
-mod util;
+mod credential;
+mod models;
 
+use self::{config::Config, credential::Credential};
 use client::Client as DKMSClient;
 use models::*;
 
@@ -39,86 +41,96 @@ pub struct SimpleAliyunKms {
 #[async_trait]
 impl KMS for SimpleAliyunKms {
     async fn generate_key(&mut self) -> Result<String> {
-        let key_id = "key-shh64705d53mly8ubf1yx".to_owned();
+        // unimpliment, only for test
+        let key_id = "key-shh6****".to_owned();
         Ok(key_id)
     }
 
     async fn encrypt(&mut self, data: &[u8], keyid: &str) -> Result<Vec<u8>> {
         // let mut req_map: HashMap<String, Box<dyn Any>> = HashMap::new();
         // req_map.insert("KeyId".to_string(), Box::new(keyid.to_string()));
-        let request = EncryptRequest::new(
-            Some(keyid.to_string()),
-            Some(data.to_vec()),
-            Some("AES_GCM".to_string()),
-            None,
-            None,
-            None
-        );
+        let request = EncryptRequest {
+            request_headers: HeaderMap::new(),
+            key_id: Some(keyid.to_string()),
+            plaintext: Some(data.to_vec()),
+            algorithm: Some("AES_GCM".to_string()),
+            aad: None,
+            iv: None,
+            padding_mode: None,
+        };
+
         // let request = EncryptRequest::default();
         // request.from_map(req_map);
-        let response = self.client.encrypt(&request).await.context("client encryption")?;
-        let data = response.ciphertext_blob.ok_or_else(|| anyhow!("encrypt response has no ciphertext_blob"))?;
-        let iv = response.iv.ok_or_else(|| anyhow!("encrypt response has no iv"))?;
+        let response = self
+            .client
+            .encrypt(&request)
+            .await
+            .context("client encryption")?;
+        let data = response
+            .ciphertext_blob
+            .ok_or_else(|| anyhow!("encrypt response has no ciphertext_blob"))?;
+        let iv = response
+            .iv
+            .ok_or_else(|| anyhow!("encrypt response has no iv"))?;
         let cp = Ciphertext { data, iv };
         Ok(serde_json::to_vec(&cp)?)
     }
 
     async fn decrypt(&mut self, ciphertext: &[u8], keyid: &str) -> Result<Vec<u8>> {
         let cp: Ciphertext = serde_json::from_slice(ciphertext)?;
-        let request = DecryptRequest::new(
-            Some(keyid.to_string()),
-            Some(cp.data),
-            Some("AES_GCM".to_string()),
-            None,
-            Some(cp.iv),
-            None
-        );
+        let request = DecryptRequest {
+            request_headers: HeaderMap::new(),
+            key_id: Some(keyid.to_string()),
+            ciphertext_blob: Some(cp.data),
+            algorithm: Some("AES_GCM".to_string()),
+            aad: None,
+            iv: Some(cp.iv),
+            padding_mode: None,
+        };
+
         let response = self.client.decrypt(&request).await?;
-        let data = response.plaintext.ok_or_else(|| anyhow!("decrypt response has no plaintext"))?;
+        let data = response
+            .plaintext
+            .ok_or_else(|| anyhow!("decrypt response has no plaintext"))?;
         Ok(data)
     }
 }
 
-impl SimpleAliyunKms {
-
-}
+impl SimpleAliyunKms {}
 
 impl SimpleAliyunKms {
-    fn new(config: HashMap<String, String>) -> Self {
+    pub fn new(config: Config, credential: Credential) -> Self {
         Self {
-            client: DKMSClient::new(config),
-            // client: DKMSClient::new(
-            //     // env::var("ACCESS_KEY_ID").unwrap(),
-            //     // env::var("ACCESS_KEY_SECRET").unwrap(),
-            //     key_id.to_owned(),
-            //     key_secret.to_owned(),
-            //     // "https://kst-shh64702cf2jvcw428tbd.cryptoservice.kms.aliyuncs.com/".to_owned(),
-            //     "https://kms.cn-shanghai.aliyuncs.com/".to_owned(),
-            // )
+            client: DKMSClient::new(config, credential),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use rstest::rstest;
 
     use crate::{plugins::aliyun::SimpleAliyunKms, KMS};
+
+    use super::{config::Config, credential::Credential};
 
     #[rstest]
     #[case(b"this is a test plaintext")]
     #[case(b"this is a another test plaintext")]
     #[tokio::test]
     async fn key_lifetime(#[case] plaintext: &[u8]) {
-        let config: HashMap<String, String> =
-            [("client_key_file".to_string(), "clientKey_KAAP.f4c8****.json".to_string()),
-            ("password".to_string(), "fa79****".to_string()),
-            ("protocol".to_string(), "https".to_string()),
-            ("endpoint".to_string(), "kst-shh6****.cryptoservice.kms.aliyuncs.com".to_string()),]
-            .iter().cloned().collect();
-        let mut kms = SimpleAliyunKms::new(config);
+        let config = Config {
+            protocol: "https".to_owned(),
+            endpoint: "kst-shh6****.cryptoservice.kms.aliyuncs.com".to_owned(),
+            region_id: "cn-shanghai".to_owned(),
+            method: "POST".to_owned(),
+            signature_method: "RSA_PKCS1_SHA_256".to_owned(),
+        };
+        let credential = Credential {
+            key_file_dir: "src/plugins/aliyun/key".to_owned(),
+            client_key_id: "KAAP.f4c8****".to_owned(),
+        };
+        let mut kms = SimpleAliyunKms::new(config, credential);
 
         let keyid = kms.generate_key().await.expect("generate key");
         let ciphertext = kms.encrypt(plaintext, &keyid).await.expect("encrypt");
@@ -126,21 +138,28 @@ mod tests {
         assert_eq!(decrypted, plaintext);
     }
 
-    // #[tokio::test]
-    // async fn encrypt_with_an_non_existent_key() {
-    //     let mut kms = SimpleAlibabaCloudKms::default();
-    //     let ciphertext = kms.encrypt(b"a test text", "an-non-existent-key-id").await;
-    //     assert!(ciphertext.is_err())
-    // }
+    #[tokio::test]
+    async fn encrypt_and_decrpty_with_different_keyid() {
+        let config = Config {
+            protocol: "https".to_owned(),
+            endpoint: "kst-shh6****.cryptoservice.kms.aliyuncs.com".to_owned(),
+            region_id: "cn-shanghai".to_owned(),
+            method: "POST".to_owned(),
+            signature_method: "RSA_PKCS1_SHA_256".to_owned(),
+        };
+        let credential = Credential {
+            key_file_dir: "src/plugins/aliyun/key".to_owned(),
+            client_key_id: "KAAP.f4c8****".to_owned(),
+        };
+        let mut kms = SimpleAliyunKms::new(config, credential);
+        let plaintext = b"encrypt_and_decrpty_with_different_keyid";
 
-    // #[tokio::test]
-    // async fn decrypt_with_an_non_existent_key() {
-    //     let mut kms = SimpleAlibabaCloudKms::default();
-    //     let keyid = kms.generate_key().await.expect("generate key");
-    //     let ciphertext = kms.encrypt(b"a test text", &keyid).await.expect("encrypt");
+        let keyid_1 = kms.generate_key().await.expect("generate key");
+        let ciphertext = kms.encrypt(plaintext, &keyid_1).await.expect("encrypt");
 
-    //     // Use a fake key id to decrypt
-    //     let decrypted = kms.decrypt(&ciphertext, "an-non-existent-key-id").await;
-    //     assert!(decrypted.is_err())
-    // }
+        let keyid_2 = "key-shh6****".to_owned();
+        let decrypted = kms.decrypt(&ciphertext, &keyid_2).await;
+
+        assert!(decrypted.is_err())
+    }
 }

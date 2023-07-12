@@ -1,10 +1,8 @@
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Config {
-    api_name: String,
-    api_version: String,
-    protocol: String,
-    endpoint: String,
-    region_id: String,
-    method: String,
-    signature_method: String,
+    pub protocol: String,
+    pub endpoint: String,
+    pub region_id: String,
+    pub method: String,
+    pub signature_method: String,
 }
